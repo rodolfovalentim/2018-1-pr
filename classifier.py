@@ -2,8 +2,9 @@ import numpy as np
 import pywt
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn import svm
-
+from sklearn import preprocessing
 from utils import Utils
+from sklearn.utils import shuffle
 
 
 class Classifier(object):
@@ -65,6 +66,8 @@ class Classifier(object):
     projected_data = None
 
     def load_data(self, config_file):
+        """ Load data from .csv, converts labels from one-hot to id and outputs a tuple (data, labels)"""
+
         raw_data = Utils.read_data(config_file, self.cols_names)
         data = raw_data.ix[:, :-1]
         data = np.array(data)
@@ -81,6 +84,8 @@ class Classifier(object):
         return data, new_labels
 
     def __remove_noise(self, data):
+        """ Remove noise from data using DWT and IDWT transform with threshold in between """
+
         denoised_data = []
 
         for feature in data.T:
@@ -111,22 +116,31 @@ class Classifier(object):
         return denoised_data
 
     def __mlda(self, data, labels):
+        """ Apply LDA which maximize the distance between classes and bring closer elements from the same cluster.
+            As a result, saves the component vectors and projects the training data into this new component space
+        """
+
         clf = LinearDiscriminantAnalysis()
         clf.fit(data, labels)
         self.mlda = clf
         self.projected_data = clf.transform(data)
-
         return self.projected_data
 
     def __svm(self, data, labels):
+        """ Apply SVM to a 2-dimension space and gets a hyperplane which separates the two classes in a optimal way. As
+        a result, it returns the hyperplane
+        """
+
         clf = svm.SVC()
         clf.fit(data, labels)
         return clf
 
     def __process_data(self, data):
+        """ project incoming data in the new component space obtain in the LDA
+        """
         return self.mlda.transform(data)
 
-    def __precision(self, true_cls, pred_cls):
+    def __accuracy(self, true_cls, pred_cls):
         test_result = []
 
         for idx, val in enumerate(true_cls):
@@ -137,16 +151,48 @@ class Classifier(object):
     def get_data(self):
         return self.projected_data
 
-    def train(self, data, labels):
+    def train(self, data, labels, std=False):
+        if std:
+            data = preprocessing.scale(data)
+
         denoised_data = self.__remove_noise(data)
-        project_data = self.__mlda(denoised_data, labels)
-        self.model = self.__svm(project_data, labels)
-        return None
+        shuffle_data, shuffle_labels = shuffle(denoised_data, labels)
+        project_data = self.__mlda(shuffle_data, shuffle_labels)
+        self.model = self.__svm(project_data, shuffle_labels)
+        return project_data
 
     def test(self, data, labels):
         assert self.model is not None, "Error: Train the model first!"
 
         test_data = self.__process_data(data)
         predicted_label = self.model.predict(test_data)
+        return self.__accuracy(labels, predicted_label), test_data, predicted_label
 
-        return self.__precision(labels, predicted_label), test_data, predicted_label
+    def cross_validation(self, data, labels, k=5):
+        size = labels.shape[0] / int(k)
+        begin = 0
+        end = size
+
+        accuracy = []
+
+        for i in range(1, k):
+            train_data = np.concatenate((data[0: begin, ], data[end:-1, ]))
+            test_data = data[begin: end]
+
+            train_labels = np.concatenate((labels[0: begin], labels[end:-1]))
+            test_label = labels[begin: end]
+
+            begin = begin + size
+            end = end + size
+
+            if len(np.unique(train_labels)) == 1:
+                continue
+
+            self.train(train_data, train_labels)
+            test_acc, _, _ = self.test(test_data, test_label)
+            accuracy.append(test_acc)
+
+        return accuracy
+
+    def plot(self):
+        return None
